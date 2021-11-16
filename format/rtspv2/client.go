@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/md5"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -124,6 +125,14 @@ func Dial(options RTSPClientOptions) (*RTSPClient, error) {
 	err = conn.SetDeadline(time.Now().Add(client.options.ReadWriteTimeout))
 	if err != nil {
 		return nil, err
+	}
+	if client.pURL.Scheme == "rtsps" {
+		tlsConn := tls.Client(conn, &tls.Config{ServerName: client.pURL.Hostname()})
+		err = tlsConn.Handshake()
+		if err != nil {
+			return nil, err
+		}
+		conn = tlsConn
 	}
 	client.conn = conn
 	client.connRW = bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
@@ -304,11 +313,15 @@ func (client *RTSPClient) startStream() {
 					client.Println("RTSP Client OutgoingPacket Chanel Full")
 					return
 				}
-				if i2.IsKeyFrame {
-					i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{client.sps, client.pps, i2.Data[4:]}, []byte{0, 0, 0, 1})...)
-				} else {
-					i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{i2.Data[4:]}, []byte{0, 0, 0, 1})...)
+				if len(i2.Data)>4 {
+					
+					if i2.IsKeyFrame {
+						i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{client.sps , client.pps , i2.Data[4:]}, []byte{0, 0, 0, 1})...)
+					}else {
+						i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{i2.Data[4:]}, []byte{0, 0, 0, 1})...)
+					}
 				}
+				
 				client.OutgoingPacketQueue <- i2
 			}
 		case 0x52:
@@ -490,7 +503,7 @@ func (client *RTSPClient) parseURL(rawURL string) error {
 	if l.Port() == "" {
 		l.Host = fmt.Sprintf("%s:%s", l.Host, "554")
 	}
-	if l.Scheme != "rtsp" {
+	if l.Scheme != "rtsp" && l.Scheme != "rtsps" {
 		l.Scheme = "rtsp"
 	}
 	client.pURL = l
@@ -636,7 +649,7 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 				case naluType == 8:
 					client.CodecUpdatePPS(nal)
 				case naluType == 24:
-					client.Println("24 Type need add next version report https://github.com/aliveyun/vdk")
+					client.Println("24 Type need add next version report https://github.com/deepch/vdk")
 				case naluType == 28:
 					fuIndicator := content[offset]
 					fuHeader := content[offset+1]
