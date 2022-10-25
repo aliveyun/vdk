@@ -120,6 +120,7 @@ func Dial(options RTSPClientOptions) (*RTSPClient, error) {
 	}
 	conn, err := net.DialTimeout("tcp", client.pURL.Host, client.options.DialTimeout)
 	if err != nil {
+		conn, err = net.DialTimeout("udp", client.pURL.Host, client.options.DialTimeout)
 		return nil, err
 	}
 	err = conn.SetDeadline(time.Now().Add(client.options.ReadWriteTimeout))
@@ -313,15 +314,15 @@ func (client *RTSPClient) startStream() {
 					client.Println("RTSP Client OutgoingPacket Chanel Full")
 					return
 				}
-				if len(i2.Data)>4 {
-					
+				if len(i2.Data) > 4 {
+
 					if i2.IsKeyFrame {
-						i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{client.sps , client.pps , i2.Data[4:]}, []byte{0, 0, 0, 1})...)
-					}else {
+						i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{client.sps, client.pps, i2.Data[4:]}, []byte{0, 0, 0, 1})...)
+					} else {
 						i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{i2.Data[4:]}, []byte{0, 0, 0, 1})...)
 					}
 				}
-				
+
 				client.OutgoingPacketQueue <- i2
 			}
 		case 0x52:
