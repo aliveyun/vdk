@@ -5,13 +5,15 @@ import (
 	"io"
 	"time"
 
+	"github.com/aliveyun/vdk/codec/h265parser"
+
 	"github.com/aliveyun/vdk/av"
 	"github.com/aliveyun/vdk/codec/aacparser"
 	"github.com/aliveyun/vdk/codec/h264parser"
 	"github.com/aliveyun/vdk/format/ts/tsio"
 )
 
-var CodecTypes = []av.CodecType{av.H264, av.AAC}
+var CodecTypes = []av.CodecType{av.H264, av.H265, av.AAC}
 
 type Muxer struct {
 	w       io.Writer
@@ -67,11 +69,16 @@ func (self *Muxer) newStream(idx int, codec av.CodecData) (err error) {
 	return
 }
 
-func (self *Muxer) writePaddingTSPackets(tsw *tsio.TSWriter) (err error) {
-	for tsw.ContinuityCounter&0xf != 0x0 {
-		if err = tsw.WritePackets(self.w, self.datav[:1], 0, false, true); err != nil {
+func (self *Muxer) writePaddingTSPackets(streamW *Stream) (err error) {
+	for streamW.tsw.ContinuityCounter&0xf != 0x0 {
+		header := tsio.TSHeader{
+			PID:               uint(streamW.pid),
+			ContinuityCounter: streamW.tsw.ContinuityCounter,
+		}
+		if _, err = tsio.WriteTSHeader(self.w, header, 0); err != nil {
 			return
 		}
+		streamW.tsw.ContinuityCounter++
 	}
 	return
 }
@@ -79,7 +86,7 @@ func (self *Muxer) writePaddingTSPackets(tsw *tsio.TSWriter) (err error) {
 func (self *Muxer) WriteTrailer() (err error) {
 	if self.PaddingToMakeCounterCont {
 		for _, stream := range self.streams {
-			if err = self.writePaddingTSPackets(stream.tsw); err != nil {
+			if err = self.writePaddingTSPackets(stream); err != nil {
 				return
 			}
 		}
@@ -116,6 +123,11 @@ func (self *Muxer) WritePATPMT() (err error) {
 		case av.H264:
 			elemStreams = append(elemStreams, tsio.ElementaryStreamInfo{
 				StreamType:    tsio.ElementaryStreamTypeH264,
+				ElementaryPID: stream.pid,
+			})
+		case av.H265:
+			elemStreams = append(elemStreams, tsio.ElementaryStreamInfo{
+				StreamType:    tsio.ElementaryStreamTypeH265,
 				ElementaryPID: stream.pid,
 			})
 		}
@@ -198,6 +210,36 @@ func (self *Muxer) WritePacket(pkt av.Packet) (err error) {
 				datav = append(datav, h264parser.AUDBytes)
 			} else {
 				datav = append(datav, h264parser.StartCodeBytes)
+			}
+			datav = append(datav, nalu)
+		}
+
+		n := tsio.FillPESHeader(self.peshdr, tsio.StreamIdH264, -1, pkt.Time+pkt.CompositionTime, pkt.Time)
+		datav[0] = self.peshdr[:n]
+
+		if err = stream.tsw.WritePackets(self.w, datav, pkt.Time, pkt.IsKeyFrame, false); err != nil {
+			return
+		}
+	case av.H265:
+		codec := stream.CodecData.(h265parser.CodecData)
+
+		nalus := self.nalus[:0]
+		if pkt.IsKeyFrame {
+			nalus = append(nalus, codec.SPS())
+			nalus = append(nalus, codec.PPS())
+			nalus = append(nalus, codec.VPS())
+		}
+		pktnalus, _ := h265parser.SplitNALUs(pkt.Data)
+		for _, nalu := range pktnalus {
+			nalus = append(nalus, nalu)
+		}
+
+		datav := self.datav[:1]
+		for i, nalu := range nalus {
+			if i == 0 {
+				datav = append(datav, h265parser.AUDBytes)
+			} else {
+				datav = append(datav, h265parser.StartCodeBytes)
 			}
 			datav = append(datav, nalu)
 		}

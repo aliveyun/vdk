@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/aliveyun/vdk/av"
+	"github.com/deepch/vdk/av"
 )
 
 type CodecData struct {

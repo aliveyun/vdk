@@ -3,8 +3,8 @@ package codec
 import (
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/codec/fake"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/codec/fake"
 )
 
 type OpusCodecData struct {

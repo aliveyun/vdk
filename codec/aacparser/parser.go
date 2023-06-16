@@ -6,8 +6,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/utils/bits"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/utils/bits"
 )
 
 // copied from libavcodec/mpeg4audio.h
@@ -288,6 +288,10 @@ func (self CodecData) SampleRate() int {
 
 func (self CodecData) SampleFormat() av.SampleFormat {
 	return av.FLTP
+}
+
+func (self CodecData) Tag() string {
+	return fmt.Sprintf("mp4a.40.%d", self.Config.ObjectType)
 }
 
 func (self CodecData) PacketDuration(data []byte) (dur time.Duration, err error) {

@@ -20,8 +20,8 @@ import (
 	"runtime"
 	"unsafe"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/codec/h264parser"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/codec/h264parser"
 )
 
 type VideoDecoder struct {

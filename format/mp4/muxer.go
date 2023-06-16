@@ -6,11 +6,13 @@ import (
 	"io"
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/codec/aacparser"
-	"github.com/aliveyun/vdk/codec/h264parser"
-	"github.com/aliveyun/vdk/format/mp4/mp4io"
-	"github.com/aliveyun/vdk/utils/bits/pio"
+	"github.com/deepch/vdk/codec/h265parser"
+
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/codec/aacparser"
+	"github.com/deepch/vdk/codec/h264parser"
+	"github.com/deepch/vdk/format/mp4/mp4io"
+	"github.com/deepch/vdk/utils/bits/pio"
 )
 
 type Muxer struct {
@@ -120,7 +122,7 @@ func (self *Stream) fillTrackAtom() (err error) {
 		self.trackAtom.Header.TrackWidth = float64(width)
 		self.trackAtom.Header.TrackHeight = float64(height)
 	} else if self.Type() == av.H265 {
-		codec := self.CodecData.(h264parser.CodecData)
+		codec := self.CodecData.(h265parser.CodecData)
 		width, height := codec.Width(), codec.Height()
 		self.sample.SampleDesc.HV1Desc = &mp4io.HV1Desc{
 			DataRefIdx:           1,

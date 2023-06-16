@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/av/pktque"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/av/pktque"
 )
 
 var Debug bool

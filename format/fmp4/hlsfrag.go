@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/format/fmp4/fmp4io"
-	"github.com/aliveyun/vdk/format/fmp4/fragment"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/format/fmp4/fmp4io"
+	"github.com/deepch/vdk/format/fmp4/fragment"
 )
 
 var (

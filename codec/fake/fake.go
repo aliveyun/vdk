@@ -1,7 +1,7 @@
 package fake
 
 import (
-	"github.com/aliveyun/vdk/av"
+	"github.com/deepch/vdk/av"
 )
 
 type CodecData struct {

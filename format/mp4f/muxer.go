@@ -202,7 +202,8 @@ func (self *Stream) fillTrackAtom() (err error) {
 		self.trackAtom.Media.Info.Video = &mp4io.VideoMediaInfo{
 			Flags: 0x000001,
 		}
-		self.codecString = fmt.Sprintf("hvc1.%02X%02X%02X", codec.RecordInfo.AVCProfileIndication, codec.RecordInfo.ProfileCompatibility, codec.RecordInfo.AVCLevelIndication)
+		//self.codecString = fmt.Sprintf("hvc1.%02X%02X%02X", codec.RecordInfo.AVCProfileIndication, codec.RecordInfo.ProfileCompatibility, codec.RecordInfo.AVCLevelIndication)
+		self.codecString = "hev1.1.6.L120.90"
 
 	} else if self.Type() == av.AAC {
 		codec := self.CodecData.(aacparser.CodecData)
@@ -308,6 +309,27 @@ func (element *Muxer) WritePacket(pkt av.Packet, GOP bool) (bool, []byte, error)
 	}
 	return got, buf, err
 }
+
+func (element *Muxer) WritePacketPrepush(pkt av.Packet, dur time.Duration, GOP bool) (bool, []byte, error) {
+	stream := element.streams[pkt.Idx]
+	if GOP {
+
+		got, buf, err := stream.writePacketV3(pkt, dur, 0)
+		stream.lastpkt = &pkt
+		if err != nil {
+			return false, []byte{}, err
+		}
+		return got, buf, err
+	}
+
+	got, buf, err := stream.writePacketV2(pkt, dur, 0)
+	stream.lastpkt = &pkt
+	if err != nil {
+		return false, []byte{}, err
+	}
+	return got, buf, err
+}
+
 func (element *Muxer) WritePacket4(pkt av.Packet) error {
 	stream := element.streams[pkt.Idx]
 	return stream.writePacketV4(pkt)
@@ -418,7 +440,7 @@ func (element *Muxer) Finalize() []byte {
 
 }
 
-//PutU32BE func
+// PutU32BE func
 func PutU32BE(b []byte, v uint32) {
 	b[0] = byte(v >> 24)
 	b[1] = byte(v >> 16)

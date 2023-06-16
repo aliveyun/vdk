@@ -7,11 +7,11 @@ import (
 	"log"
 	"time"
 
-	"github.com/pion/interceptor"
-	"github.com/pion/webrtc/v3"
+	"github.com/aliveyun/vdk/codec/h264parser"
 
 	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/codec/h264parser"
+	"github.com/pion/interceptor"
+	"github.com/pion/webrtc/v3"
 	"github.com/pion/webrtc/v3/pkg/media"
 )
 
@@ -43,6 +43,8 @@ type Options struct {
 	ICEUsername string
 	// ICECredential is an optional credential (i.e., password) for authenticating with the given ICEServers
 	ICECredential string
+	// ICECandidates sets a list of external IP addresses of 1:1
+	ICECandidates []string
 	// PortMin is an optional minimum (inclusive) ephemeral UDP port range for the ICEServers connections
 	PortMin uint16
 	// PortMin is an optional maximum (inclusive) ephemeral UDP port range for the ICEServers connections
@@ -63,6 +65,10 @@ func (element *Muxer) NewPeerConnection(configuration webrtc.Configuration) (*we
 			Credential:     element.Options.ICECredential,
 			CredentialType: webrtc.ICECredentialTypePassword,
 		})
+	} else {
+		configuration.ICEServers = append(configuration.ICEServers, webrtc.ICEServer{
+			URLs: []string{"stun:stun.l.google.com:19302"},
+		})
 	}
 	m := &webrtc.MediaEngine{}
 	if err := m.RegisterDefaultCodecs(); err != nil {
@@ -76,6 +82,10 @@ func (element *Muxer) NewPeerConnection(configuration webrtc.Configuration) (*we
 	if element.Options.PortMin > 0 && element.Options.PortMax > 0 && element.Options.PortMax > element.Options.PortMin {
 		s.SetEphemeralUDPPortRange(element.Options.PortMin, element.Options.PortMax)
 		log.Println("Set UDP ports to", element.Options.PortMin, "..", element.Options.PortMax)
+	}
+	if len(element.Options.ICECandidates) > 0 {
+		s.SetNAT1To1IPs(element.Options.ICECandidates, webrtc.ICECandidateTypeHost)
+		log.Println("Set ICECandidates", element.Options.ICECandidates)
 	}
 	api := webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(i), webrtc.WithSettingEngine(s))
 	return api.NewPeerConnection(configuration)
@@ -112,13 +122,22 @@ func (element *Muxer) WriteHeader(streams []av.CodecData, sdp64 string) (string,
 		if i2.Type().IsVideo() {
 			if i2.Type() == av.H264 {
 				track, err = webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{
-					MimeType: "video/h264",
-				}, "pion-rtsp-video", "pion-rtsp-video")
+					MimeType: webrtc.MimeTypeH264,
+				}, "pion-rtsp-video", "pion-video")
 				if err != nil {
 					return "", err
 				}
-				if _, err = peerConnection.AddTrack(track); err != nil {
+				if rtpSender, err := peerConnection.AddTrack(track); err != nil {
 					return "", err
+				} else {
+					go func() {
+						rtcpBuf := make([]byte, 1500)
+						for {
+							if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+								return
+							}
+						}
+					}()
 				}
 			}
 		} else if i2.Type().IsAudio() {
@@ -142,8 +161,17 @@ func (element *Muxer) WriteHeader(streams []av.CodecData, sdp64 string) (string,
 			if err != nil {
 				return "", err
 			}
-			if _, err = peerConnection.AddTrack(track); err != nil {
+			if rtpSender, err := peerConnection.AddTrack(track); err != nil {
 				return "", err
+			} else {
+				go func() {
+					rtcpBuf := make([]byte, 1500)
+					for {
+						if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+							return
+						}
+					}
+				}()
 			}
 		}
 		element.streams[int8(i)] = &Stream{track: track, codec: i2}
@@ -213,12 +241,30 @@ func (element *Muxer) WritePacket(pkt av.Packet) (err error) {
 		}
 		switch tmp.codec.Type() {
 		case av.H264:
-			codec := tmp.codec.(h264parser.CodecData)
-			if pkt.IsKeyFrame {
-				pkt.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{codec.SPS(), codec.PPS(), pkt.Data[4:]}, []byte{0, 0, 0, 1})...)
-			} else {
-				pkt.Data = pkt.Data[4:]
+			nalus, _ := h264parser.SplitNALUs(pkt.Data)
+			for _, nalu := range nalus {
+				naltype := nalu[0] & 0x1f
+				if naltype == 5 {
+					codec := tmp.codec.(h264parser.CodecData)
+					err = tmp.track.WriteSample(media.Sample{Data: append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{codec.SPS(), codec.PPS(), nalu}, []byte{0, 0, 0, 1})...), Duration: pkt.Duration})
+				} else {
+					err = tmp.track.WriteSample(media.Sample{Data: append([]byte{0, 0, 0, 1}, nalu...), Duration: pkt.Duration})
+				}
+				if err != nil {
+					return err
+				}
 			}
+			WritePacketSuccess = true
+			return
+			/*
+
+				if pkt.IsKeyFrame {
+					pkt.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{codec.SPS(), codec.PPS(), pkt.Data[4:]}, []byte{0, 0, 0, 1})...)
+				} else {
+					pkt.Data = pkt.Data[4:]
+				}
+
+			*/
 		case av.PCM_ALAW:
 		case av.OPUS:
 		case av.PCM_MULAW:

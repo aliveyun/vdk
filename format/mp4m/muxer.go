@@ -6,11 +6,11 @@ import (
 	"io"
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/codec/aacparser"
-	"github.com/aliveyun/vdk/codec/h264parser"
-	"github.com/aliveyun/vdk/format/mp4/mp4io"
-	"github.com/aliveyun/vdk/utils/bits/pio"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/codec/aacparser"
+	"github.com/deepch/vdk/codec/h264parser"
+	"github.com/deepch/vdk/format/mp4/mp4io"
+	"github.com/deepch/vdk/utils/bits/pio"
 )
 
 type Muxer struct {

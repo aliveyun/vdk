@@ -9,6 +9,7 @@ import (
 	"github.com/aliveyun/vdk/av"
 	"github.com/aliveyun/vdk/codec/aacparser"
 	"github.com/aliveyun/vdk/codec/h264parser"
+	"github.com/aliveyun/vdk/codec/mjpeg"
 	"github.com/aliveyun/vdk/format/ts/tsio"
 	"github.com/aliveyun/vdk/utils/bits/pio"
 )
@@ -22,8 +23,8 @@ type Demuxer struct {
 	pmt     *tsio.PMT
 	streams []*Stream
 	tshdr   []byte
-
-	stage int
+	AnnexB  bool
+	stage   int
 }
 
 func NewDemuxer(r io.Reader) *Demuxer {
@@ -118,6 +119,8 @@ func (self *Demuxer) initPMT(payload []byte) (err error) {
 			self.streams = append(self.streams, stream)
 		case tsio.ElementaryStreamTypeAdtsAAC:
 			self.streams = append(self.streams, stream)
+		case tsio.ElementaryStreamTypeAlignmentDescriptor:
+			self.streams = append(self.streams, stream)
 		}
 	}
 	return
@@ -173,6 +176,9 @@ func (self *Demuxer) readTSPacket() (err error) {
 	} else {
 		for _, stream := range self.streams {
 			if pid == stream.pid {
+				if stream.streamType == tsio.ElementaryStreamTypeAdtsAAC {
+					iskeyframe = false
+				}
 				if err = stream.handleTSPacket(start, iskeyframe, payload); err != nil {
 					return
 				}
@@ -184,12 +190,23 @@ func (self *Demuxer) readTSPacket() (err error) {
 	return
 }
 
-func (self *Stream) addPacket(payload []byte, timedelta time.Duration) {
+func (self *Stream) addPacket(payload []byte, timedelta time.Duration, fixed time.Duration) {
 	dts := self.dts
 	pts := self.pts
+
 	if dts == 0 {
 		dts = pts
 	}
+
+	dur := time.Duration(0)
+
+	if self.pt > 0 {
+		dur = dts + timedelta - self.pt
+	} else {
+		dur = fixed
+	}
+
+	self.pt = dts + timedelta
 
 	demuxer := self.demuxer
 	pkt := av.Packet{
@@ -197,6 +214,7 @@ func (self *Stream) addPacket(payload []byte, timedelta time.Duration) {
 		IsKeyFrame: self.iskeyframe,
 		Time:       dts + timedelta,
 		Data:       payload,
+		Duration:   dur,
 	}
 	if pts != dts {
 		pkt.CompositionTime = pts - dts
@@ -214,8 +232,16 @@ func (self *Stream) payloadEnd() (n int, err error) {
 		return
 	}
 	self.data = nil
-
 	switch self.streamType {
+	case tsio.ElementaryStreamTypeAlignmentDescriptor:
+		if self.CodecData == nil {
+			self.CodecData = mjpeg.CodecData{}
+		}
+		b := make([]byte, 4+len(payload))
+		pio.PutU32BE(b[0:4], uint32(len(payload)))
+		copy(b[4:], payload)
+		self.addPacket(b, time.Duration(0), 0)
+		n++
 	case tsio.ElementaryStreamTypeAdtsAAC:
 		var config aacparser.MPEG4AudioConfig
 
@@ -230,7 +256,7 @@ func (self *Stream) payloadEnd() (n int, err error) {
 					return
 				}
 			}
-			self.addPacket(payload[hdrlen:framelen], delta)
+			self.addPacket(payload[hdrlen:framelen], delta, time.Duration(samples)*time.Second/time.Duration(config.SampleRate))
 			n++
 			delta += time.Duration(samples) * time.Second / time.Duration(config.SampleRate)
 			payload = payload[framelen:]
@@ -239,23 +265,38 @@ func (self *Stream) payloadEnd() (n int, err error) {
 	case tsio.ElementaryStreamTypeH264:
 		nalus, _ := h264parser.SplitNALUs(payload)
 		var sps, pps []byte
+
 		for _, nalu := range nalus {
 			if len(nalu) > 0 {
 				naltype := nalu[0] & 0x1f
 				switch {
 				case naltype == 7:
 					sps = nalu
+					info, err := h264parser.ParseSPS(sps)
+					if err == nil {
+						self.fps = info.FPS
+					}
 				case naltype == 8:
 					pps = nalu
 				case h264parser.IsDataNALU(nalu):
 					// raw nalu to avcc
-					b := make([]byte, 4+len(nalu))
-					pio.PutU32BE(b[0:4], uint32(len(nalu)))
-					copy(b[4:], nalu)
-					self.addPacket(b, time.Duration(0))
-					n++
+					if !self.demuxer.AnnexB {
+						b := make([]byte, 4+len(nalu))
+						pio.PutU32BE(b[0:4], uint32(len(nalu)))
+						copy(b[4:], nalu)
+						self.addPacket(b, time.Duration(0), (1000*time.Millisecond)/time.Duration(self.fps))
+						n++
+					}
 				}
 			}
+		}
+
+		if self.demuxer.AnnexB {
+			b := make([]byte, 4+len(payload))
+			pio.PutU32BE(b[0:4], uint32(len(payload)))
+			copy(b[4:], payload)
+			self.addPacket(b, time.Duration(0), 0)
+			n++
 		}
 
 		if self.CodecData == nil && len(sps) > 0 && len(pps) > 0 {

@@ -121,6 +121,7 @@ var (
 	VP8        = MakeVideoCodecType(avCodecTypeMagic + 4)
 	VP9        = MakeVideoCodecType(avCodecTypeMagic + 5)
 	AV1        = MakeVideoCodecType(avCodecTypeMagic + 6)
+	MJPEG      = MakeVideoCodecType(avCodecTypeMagic + 7)
 	AAC        = MakeAudioCodecType(avCodecTypeMagic + 1)
 	PCM_MULAW  = MakeAudioCodecType(avCodecTypeMagic + 2)
 	PCM_ALAW   = MakeAudioCodecType(avCodecTypeMagic + 3)
@@ -190,7 +191,7 @@ const avCodecTypeMagic = 233333
 // CodecData is some important bytes for initializing audio/video decoder,
 // can be converted to VideoCodecData or AudioCodecData using:
 //
-//     codecdata.(AudioCodecData) or codecdata.(VideoCodecData)
+//	codecdata.(AudioCodecData) or codecdata.(VideoCodecData)
 //
 // for H264, CodecData is AVCDecoderConfigure bytes, includes SPS/PPS.
 type CodecData interface {
@@ -254,6 +255,7 @@ type Packet struct {
 	Time            time.Duration // packet decode time
 	Duration        time.Duration //packet duration
 	Data            []byte        // packet data
+	Codec           CodecType
 }
 
 // Raw audio frame.

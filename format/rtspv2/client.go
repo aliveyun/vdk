@@ -12,6 +12,7 @@ import (
 	"html"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/url"
 	"strconv"
@@ -37,8 +38,11 @@ const (
 )
 
 const (
-	RTPHeaderSize = 12
+	RTPHeaderSize      = 12
+	RTCPSenderReport   = 200
+	RTCPReceiverReport = 201
 )
+
 const (
 	DESCRIBE = "DESCRIBE"
 	OPTIONS  = "OPTIONS"
@@ -88,15 +92,17 @@ type RTSPClient struct {
 	PreSequenceNumber   int
 	FPS                 int
 	WaitCodec           bool
+	chTMP               int
 }
 
 type RTSPClientOptions struct {
-	Debug            bool
-	URL              string
-	DialTimeout      time.Duration
-	ReadWriteTimeout time.Duration
-	DisableAudio     bool
-	OutgoingProxy    bool
+	Debug              bool
+	URL                string
+	DialTimeout        time.Duration
+	ReadWriteTimeout   time.Duration
+	DisableAudio       bool
+	OutgoingProxy      bool
+	InsecureSkipVerify bool
 }
 
 func Dial(options RTSPClientOptions) (*RTSPClient, error) {
@@ -113,7 +119,7 @@ func Dial(options RTSPClientOptions) (*RTSPClient, error) {
 		options:             options,
 		AudioTimeScale:      8000,
 	}
-	client.headers["User-Agent"] = "Lavf58.20.100"
+	client.headers["User-Agent"] = "Lavf58.76.100"
 	err := client.parseURL(html.UnescapeString(client.options.URL))
 	if err != nil {
 		return nil, err
@@ -121,14 +127,16 @@ func Dial(options RTSPClientOptions) (*RTSPClient, error) {
 	conn, err := net.DialTimeout("tcp", client.pURL.Host, client.options.DialTimeout)
 	if err != nil {
 		conn, err = net.DialTimeout("udp", client.pURL.Host, client.options.DialTimeout)
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
 	}
 	err = conn.SetDeadline(time.Now().Add(client.options.ReadWriteTimeout))
 	if err != nil {
 		return nil, err
 	}
 	if client.pURL.Scheme == "rtsps" {
-		tlsConn := tls.Client(conn, &tls.Config{ServerName: client.pURL.Hostname()})
+		tlsConn := tls.Client(conn, &tls.Config{InsecureSkipVerify: options.InsecureSkipVerify, ServerName: client.pURL.Hostname()})
 		err = tlsConn.Handshake()
 		if err != nil {
 			return nil, err
@@ -145,12 +153,12 @@ func Dial(options RTSPClientOptions) (*RTSPClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	var ch int
+
 	for _, i2 := range client.mediaSDP {
 		if (i2.AVType != VIDEO && i2.AVType != AUDIO) || (client.options.DisableAudio && i2.AVType == AUDIO) {
 			continue
 		}
-		err = client.request(SETUP, map[string]string{"Transport": "RTP/AVP/TCP;unicast;interleaved=" + strconv.Itoa(ch) + "-" + strconv.Itoa(ch+1)}, client.ControlTrack(i2.Control), false, false)
+		err = client.request(SETUP, map[string]string{"Transport": "RTP/AVP/TCP;unicast;interleaved=" + strconv.Itoa(client.chTMP) + "-" + strconv.Itoa(client.chTMP+1)}, client.ControlTrack(i2.Control), false, false)
 		if err != nil {
 			return nil, err
 		}
@@ -169,29 +177,28 @@ func Dial(options RTSPClientOptions) (*RTSPClient, error) {
 				client.FPS = i2.FPS
 				client.videoCodec = av.H264
 			} else if i2.Type == av.H265 {
+
 				if len(i2.SpropVPS) > 1 && len(i2.SpropSPS) > 1 && len(i2.SpropPPS) > 1 {
 					if codecData, err := h265parser.NewCodecDataFromVPSAndSPSAndPPS(i2.SpropVPS, i2.SpropSPS, i2.SpropPPS); err == nil {
 						client.vps = i2.SpropVPS
 						client.sps = i2.SpropSPS
 						client.pps = i2.SpropPPS
 						client.CodecData = append(client.CodecData, codecData)
+
 					}
 				} else {
 					client.CodecData = append(client.CodecData, h265parser.CodecData{})
 				}
 				client.videoCodec = av.H265
-				//} else if i2.Type == av.JPEG {
-				//	client.CodecData = append(client.CodecData, h264parser.CodecData{})
-				//	client.WaitCodec = true
-				//	client.videoCodec = av.H264
+
 			} else {
 				client.Println("SDP Video Codec Type Not Supported", i2.Type)
 			}
 			client.videoIDX = int8(len(client.CodecData) - 1)
-			client.videoID = ch
+			client.videoID = client.chTMP
 		}
 		if i2.AVType == AUDIO {
-			client.audioID = ch
+			client.audioID = client.chTMP
 			var CodecData av.AudioCodecData
 			switch i2.Type {
 			case av.AAC:
@@ -228,7 +235,7 @@ func Dial(options RTSPClientOptions) (*RTSPClient, error) {
 				}
 			}
 		}
-		ch += 2
+		client.chTMP += 2
 	}
 	//test := map[string]string{"Scale": "1.000000", "Speed": "1.000000", "Range": "clock=20210929T210000Z-20210929T211000Z"}
 	err = client.request(PLAY, nil, client.control, false, false)
@@ -296,6 +303,7 @@ func (client *RTSPClient) startStream() {
 				client.Println("RTSP Client RTP ReadFull", err)
 				return
 			}
+
 			//atomic.AddInt64(&client.Bitrate, int64(length+4))
 			if client.options.OutgoingProxy {
 				if len(client.OutgoingProxyQueue) < 2000 {
@@ -309,20 +317,24 @@ func (client *RTSPClient) startStream() {
 			if !got {
 				continue
 			}
+
 			for _, i2 := range pkt {
 				if len(client.OutgoingPacketQueue) > 2000 {
 					client.Println("RTSP Client OutgoingPacket Chanel Full")
 					return
 				}
 				if len(i2.Data) > 4 {
-
 					if i2.IsKeyFrame {
-						i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{client.sps, client.pps, i2.Data[4:]}, []byte{0, 0, 0, 1})...)
+						if i2.Codec == av.H265 {
+							i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{client.vps, client.sps, client.pps, i2.Data[4:]}, []byte{0, 0, 0, 1})...)
+						} else if i2.Codec == av.H264 {
+							i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{client.sps, client.pps, i2.Data[4:]}, []byte{0, 0, 0, 1})...)
+						}
+
 					} else {
 						i2.Data = append([]byte{0, 0, 0, 1}, bytes.Join([][]byte{i2.Data[4:]}, []byte{0, 0, 0, 1})...)
 					}
 				}
-
 				client.OutgoingPacketQueue <- i2
 			}
 		case 0x52:
@@ -479,6 +491,26 @@ func (client *RTSPClient) request(method string, customHeaders map[string]string
 				_, client.mediaSDP = sdp.Parse(string(client.SDPRaw))
 			}
 		}
+		if method == SETUP {
+			//deep := stringInBetween(builder.String(), "interleaved=", ";")
+			if val, ok := res["Transport"]; ok {
+				splits2 := strings.Split(val, ";")
+				for _, vs := range splits2 {
+					if strings.Contains(vs, "interleaved") {
+						splits3 := strings.Split(vs, "=")
+						if len(splits3) == 2 {
+							splits4 := strings.Split(splits3[1], "-")
+							if len(splits4) == 2 {
+								if val, err := strconv.Atoi(splits4[0]); err == nil {
+									client.chTMP = val
+								}
+							}
+						}
+					}
+				}
+			}
+
+		}
 		client.Println(builder.String())
 	}
 	return
@@ -536,14 +568,35 @@ func stringInBetween(str string, start string, end string) (result string) {
 	return str
 }
 
+// typedef struct _rtp_header_t
+//
+//	{
+//		uint32_t v:2;		/* protocol version */
+//		uint32_t p:1;		/* padding flag */
+//		uint32_t x:1;		/* header extension flag */
+//		uint32_t cc:4;		/* CSRC count */
+//		uint32_t m:1;		/* marker bit */
+//		uint32_t pt:7;		/* payload type */
+//		uint32_t seq:16;	/* sequence number */
+//		uint32_t timestamp; /* timestamp */
+//		uint32_t ssrc;		/* synchronization source */
+//	} rtp_header_t;
 func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
+
 	content := *payloadRAW
 	firstByte := content[4]
 	padding := (firstByte>>5)&1 == 1
 	extension := (firstByte>>4)&1 == 1
 	CSRCCnt := int(firstByte & 0x0f)
 	SequenceNumber := int(binary.BigEndian.Uint16(content[6:8]))
-	timestamp := int64(binary.BigEndian.Uint32(content[8:12]))
+	timestamp := int64(binary.BigEndian.Uint32(content[8:16]))
+	Marker := (content[5] >> 7 & 0x1) > 0
+
+	if isRTCPPacket(content) {
+		client.Println("skipping RTCP packet")
+		return nil, false
+	}
+
 	offset := RTPHeaderSize
 
 	end := len(content)
@@ -572,6 +625,14 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 		if client.PreVideoTS == 0 {
 			client.PreVideoTS = timestamp
 		}
+		if timestamp-client.PreVideoTS < 0 {
+			if math.MaxUint32-client.PreVideoTS < 90*100 { //100 ms
+				client.PreVideoTS = 0
+				client.PreVideoTS -= (math.MaxUint32 - client.PreVideoTS)
+			} else {
+				client.PreVideoTS = 0
+			}
+		}
 		if client.PreSequenceNumber != 0 && SequenceNumber-client.PreSequenceNumber != 1 {
 			client.Println("drop packet", SequenceNumber-1)
 		}
@@ -598,7 +659,9 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 						IsKeyFrame:      false,
 						Duration:        time.Duration(float32(timestamp-client.PreVideoTS)/90) * time.Millisecond,
 						Time:            time.Duration(timestamp/90) * time.Millisecond,
+						Codec:           av.H265,
 					})
+
 				case h265parser.NAL_UNIT_VPS:
 					client.CodecUpdateVPS(nal)
 				case h265parser.NAL_UNIT_SPS:
@@ -606,18 +669,45 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 				case h265parser.NAL_UNIT_PPS:
 					client.CodecUpdatePPS(nal)
 				case h265parser.NAL_UNIT_UNSPECIFIED_49:
-					se := nal[2] >> 6
+					//se := nal[2] >> 6
 					naluType := nal[2] & 0x3f
-					if se == 2 {
+					// if Marker {
+					// 	fmt.Println("llll",Marker)
+					// }
+
+					s := nal[2] >> 7
+					e := (nal[2] >> 6) & 0x01
+
+					//s := nal[2] & 0x80
+					//e := nal[2] & 0x40
+					if s > 0 && client.BufferRtpPacket.Len() == 0 {
 						client.BufferRtpPacket.Truncate(0)
 						client.BufferRtpPacket.Reset()
-						client.BufferRtpPacket.Write([]byte{(nal[0] & 0x81) | (naluType << 1), nal[1]})
-						r := make([]byte, 2)
-						r[1] = nal[1]
-						r[0] = (nal[0] & 0x81) | (naluType << 1)
-						client.BufferRtpPacket.Write(nal[3:])
-					} else if se == 1 {
-						client.BufferRtpPacket.Write(nal[3:])
+						// client.BufferRtpPacket.Write([]byte{(nal[0] & 0x81) | (naluType << 1), nal[1]})
+						// r := make([]byte, 2)
+						// r[1] = nal[1]
+						// r[0] = (nal[0] & 0x81) | (naluType << 1)
+						// client.BufferRtpPacket.Write(nal[3:])
+
+						typ := nal[2] & 0b111111
+						head := uint16(nal[0]&0b10000001)<<8 | uint16(typ)<<9 | uint16(nal[1])
+
+						client.BufferRtpPacket.Write([]byte{byte(head >> 8), byte(head)})
+						//client.BufferRtpPacket.Write(nal[3:])
+
+					} else if s > 0 && client.BufferRtpPacket.Len() > 0 {
+						typ := nal[2] & 0b111111
+						head := uint16(nal[0]&0b10000001)<<8 | uint16(typ)<<9 | uint16(nal[1])
+
+						client.BufferRtpPacket.Write([]byte{0, 0, 0, 1})
+						client.BufferRtpPacket.Write([]byte{byte(head >> 8), byte(head)})
+
+					}
+					client.BufferRtpPacket.Write(nal[3:])
+
+					if e > 0 && Marker {
+						//client.BufferRtpPacket.Write(nal[3:])
+
 						retmap = append(retmap, &av.Packet{
 							Data:            append(binSize(client.BufferRtpPacket.Len()), client.BufferRtpPacket.Bytes()...),
 							CompositionTime: time.Duration(1) * time.Millisecond,
@@ -625,9 +715,10 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 							IsKeyFrame:      naluType == h265parser.NAL_UNIT_CODED_SLICE_IDR_W_RADL,
 							Duration:        time.Duration(float32(timestamp-client.PreVideoTS)/90) * time.Millisecond,
 							Time:            time.Duration(timestamp/90) * time.Millisecond,
+							Codec:           av.H265,
 						})
-					} else {
-						client.BufferRtpPacket.Write(nal[3:])
+						client.BufferRtpPacket.Truncate(0)
+						client.BufferRtpPacket.Reset()
 					}
 				default:
 					//client.Println("Unsupported Nal", naluType)
@@ -644,13 +735,38 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 						IsKeyFrame:      naluType == 5,
 						Duration:        time.Duration(float32(timestamp-client.PreVideoTS)/90) * time.Millisecond,
 						Time:            time.Duration(timestamp/90) * time.Millisecond,
+						Codec:           av.H264,
 					})
 				case naluType == 7:
 					client.CodecUpdateSPS(nal)
 				case naluType == 8:
 					client.CodecUpdatePPS(nal)
 				case naluType == 24:
-					client.Println("24 Type need add next version report https://github.com/deepch/vdk")
+					packet := nal[1:]
+					for len(packet) >= 2 {
+						size := int(packet[0])<<8 | int(packet[1])
+						if size+2 > len(packet) {
+							break
+						}
+						naluTypefs := packet[2] & 0x1f
+						switch {
+						case naluTypefs >= 1 && naluTypefs <= 5:
+							retmap = append(retmap, &av.Packet{
+								Data:            append(binSize(len(packet[2:size+2])), packet[2:size+2]...),
+								CompositionTime: time.Duration(1) * time.Millisecond,
+								Idx:             client.videoIDX,
+								IsKeyFrame:      naluType == 5,
+								Duration:        time.Duration(float32(timestamp-client.PreVideoTS)/90) * time.Millisecond,
+								Time:            time.Duration(timestamp/90) * time.Millisecond,
+								Codec:           av.H264,
+							})
+						case naluTypefs == 7:
+							client.CodecUpdateSPS(packet[2 : size+2])
+						case naluTypefs == 8:
+							client.CodecUpdatePPS(packet[2 : size+2])
+						}
+						packet = packet[size+2:]
+					}
 				case naluType == 28:
 					fuIndicator := content[offset]
 					fuHeader := content[offset+1]
@@ -690,11 +806,12 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 								Idx:             client.videoIDX,
 								IsKeyFrame:      naluTypef == 5,
 								Time:            time.Duration(timestamp/90) * time.Millisecond,
+								Codec:           av.H264,
 							})
 						}
 					}
 				default:
-					//client.Println("Unsupported NAL Type", naluType)
+					client.Println("Unsupported NAL Type", naluType)
 				}
 			}
 		}
@@ -719,8 +836,9 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 					CompositionTime: time.Duration(1) * time.Millisecond,
 					Duration:        duration,
 					Idx:             client.audioIDX,
-					IsKeyFrame:      false,
+					IsKeyFrame:      true,
 					Time:            client.AudioTimeLine,
+					Codec:           av.PCM_MULAW,
 				})
 			case av.PCM_ALAW:
 				duration = time.Duration(len(nal)) * time.Second / time.Duration(client.AudioTimeScale)
@@ -730,8 +848,9 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 					CompositionTime: time.Duration(1) * time.Millisecond,
 					Duration:        duration,
 					Idx:             client.audioIDX,
-					IsKeyFrame:      false,
+					IsKeyFrame:      true,
 					Time:            client.AudioTimeLine,
+					Codec:           av.PCM_ALAW,
 				})
 			case av.OPUS:
 				duration = time.Duration(20) * time.Millisecond
@@ -741,8 +860,9 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 					CompositionTime: time.Duration(1) * time.Millisecond,
 					Duration:        duration,
 					Idx:             client.audioIDX,
-					IsKeyFrame:      false,
+					IsKeyFrame:      true,
 					Time:            client.AudioTimeLine,
+					Codec:           av.OPUS,
 				})
 			case av.AAC:
 				auHeadersLength := uint16(0) | (uint16(nal[0]) << 8) | uint16(nal[1])
@@ -766,8 +886,9 @@ func (client *RTSPClient) RTPDemuxer(payloadRAW *[]byte) ([]*av.Packet, bool) {
 						CompositionTime: time.Duration(1) * time.Millisecond,
 						Duration:        duration,
 						Idx:             client.audioIDX,
-						IsKeyFrame:      false,
+						IsKeyFrame:      true,
 						Time:            client.AudioTimeLine,
+						Codec:           av.AAC,
 					})
 				}
 			}
@@ -887,19 +1008,26 @@ func (client *RTSPClient) CodecUpdateVPS(val []byte) {
 	} else {
 		client.CodecData = append(client.CodecData, codecData)
 	}
+
 	client.Signals <- SignalCodecUpdate
+
 }
 
-//Println mini logging functions
+// Println mini logging functions
 func (client *RTSPClient) Println(v ...interface{}) {
 	if client.options.Debug {
 		log.Println(v)
 	}
 }
 
-//binSize
+// binSize
 func binSize(val int) []byte {
 	buf := make([]byte, 4)
 	binary.BigEndian.PutUint32(buf, uint32(val))
 	return buf
+}
+
+func isRTCPPacket(content []byte) bool {
+	rtcpPacketType := content[5]
+	return rtcpPacketType == RTCPSenderReport || rtcpPacketType == RTCPReceiverReport
 }

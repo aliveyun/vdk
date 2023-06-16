@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/codec/aacparser"
-	"github.com/aliveyun/vdk/utils/bits/pio"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/codec/aacparser"
+	"github.com/deepch/vdk/utils/bits/pio"
 )
 
 type DecoderConfigDescriptor struct {

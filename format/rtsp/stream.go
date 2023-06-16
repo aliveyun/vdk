@@ -3,8 +3,8 @@ package rtsp
 import (
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/format/rtsp/sdp"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/format/rtsp/sdp"
 )
 
 type Stream struct {

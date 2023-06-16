@@ -48,8 +48,8 @@ func DialTimeout(uri string, timeout time.Duration) (conn *Conn, err error) {
 	if netconn, err = dailer.Dial("tcp", u.Host); err != nil {
 		return
 	}
-	connt := &connWithTimeout{Timeout: timeout, Conn: netconn}
-	conn = NewConn(connt)
+
+	conn = NewConn(netconn)
 	conn.URL = u
 	return
 }
@@ -111,8 +111,8 @@ func (self *Server) ListenAndServe() (err error) {
 		if Debug {
 			fmt.Println("rtmp: server: accepted")
 		}
-		connt := &connWithTimeout{Timeout: 5 * time.Second, Conn: netconn}
-		conn := NewConn(connt)
+
+		conn := NewConn(netconn)
 		conn.isserver = true
 		go func() {
 			err := self.handleConn(conn)
@@ -148,7 +148,7 @@ type Conn struct {
 	ackn                uint32
 	writebuf            []byte
 	readbuf             []byte
-	netconn             *connWithTimeout
+	netconn             net.Conn
 	txrxcount           *txrxcount
 	writeMaxChunkSize   int
 	readMaxChunkSize    int
@@ -191,7 +191,7 @@ func (self *txrxcount) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func NewConn(netconn *connWithTimeout) *Conn {
+func NewConn(netconn net.Conn) *Conn {
 	conn := &Conn{}
 	conn.prober = &flv.Prober{}
 	conn.netconn = netconn
@@ -1623,20 +1623,15 @@ func (self *Conn) handshakeServer() (err error) {
 	clitime := pio.U32BE(C1[0:4])
 	srvtime := clitime
 	srvver := uint32(0x0d0e0a0d)
-	cliver := pio.U32BE(C1[4:8])
 
-	if cliver != 0 {
-		var ok bool
-		var digest []byte
-		if ok, digest = hsParse1(C1, hsClientPartialKey, hsServerFullKey); !ok {
-			err = fmt.Errorf("rtmp: handshake server: C1 invalid")
-			return
-		}
+	var ok bool
+	var digest []byte
+	if ok, digest = hsParse1(C1, hsClientPartialKey, hsServerFullKey); ok {
 		hsCreate01(S0S1, srvtime, srvver, hsServerPartialKey)
 		hsCreate2(S2, digest)
 	} else {
-		copy(S1, C1)
-		copy(S2, C2)
+		copy(S1, C2)
+		copy(S2, C1)
 	}
 
 	if _, err = self.bufw.Write(S0S1S2); err != nil {

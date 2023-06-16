@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aliveyun/vdk/utils/bits/pio"
+	"github.com/deepch/vdk/utils/bits/pio"
 )
 
 type ParseError struct {

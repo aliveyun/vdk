@@ -3,7 +3,7 @@ package fragment
 import (
 	"time"
 
-	"github.com/aliveyun/vdk/av"
+	"github.com/deepch/vdk/av"
 )
 
 type Fragment struct {

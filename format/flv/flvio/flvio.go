@@ -5,8 +5,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/aliveyun/vdk/av"
-	"github.com/aliveyun/vdk/utils/bits/pio"
+	"github.com/deepch/vdk/av"
+	"github.com/deepch/vdk/utils/bits/pio"
 )
 
 func TsToTime(ts int32) time.Duration {
@@ -59,6 +59,7 @@ const (
 	FRAME_INTER = 2
 
 	VIDEO_H264 = 7
+	VIDEO_H265 = 12
 )
 
 type Tag struct {
